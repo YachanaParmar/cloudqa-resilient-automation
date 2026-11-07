@@ -1,0 +1,36 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Duplicate Controls Test</title>
+</head>
+<body>
+  <h1>Registration Form</h1>
+
+  <section>
+    <label for="first">First Name</label>
+    <input id="first" type="text">
+  </section>
+
+  <fieldset>
+    <legend>Guardian Gender</legend>
+    <label><input type="radio" name="guardian" value="Male">Male</label>
+   <label><input type="radio" name="guardian" value="Female" onclick="document.title='WRONG-GROUP'">Female</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Gender</legend>
+    <label><input type="radio" name="applicant" value="Male">Male</label>
+   <label><input type="radio" name="applicant" value="Female" onclick="document.title='CORRECT-GROUP'">Female</label>
+    <label><input type="radio" name="applicant" value="Transgender">Transgender</label>
+  </fieldset>
+
+  <section>
+    <label for="state-choice">State</label>
+    <select id="state-choice">
+      <option>India</option>
+      <option>Canada</option>
+    </select>
+  </section>
+</body>
+</html>

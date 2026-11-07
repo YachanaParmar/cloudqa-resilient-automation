@@ -1,0 +1,60 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>CloudQA Mutation Test</title>
+</head>
+<body>
+  <h1>Automation Practice Form - Modified</h1>
+
+  <!-- State appears FIRST, with changed attributes -->
+  <section>
+    <label for="region-choice">State</label>
+    <select id="region-choice" name="location-selection">
+      <option value="">-- Select Country --</option>
+      <option value="India">India</option>
+      <option value="Australia">Australia</option>
+      <option value="Canada">Canada</option>
+    </select>
+  </section>
+
+  <!-- Similar-looking distractor -->
+  <section>
+    <label for="billing-first">Billing First Name</label>
+    <input id="billing-first" name="billing-contact" type="text">
+  </section>
+
+  <!-- Gender appears SECOND, with changed attributes -->
+  <fieldset>
+    <legend>Gender</legend>
+
+    <label>
+      <input type="radio" name="identity-choice" value="Male">
+      Male
+    </label>
+
+    <label>
+      <input type="radio" name="identity-choice" value="Female">
+      Female
+    </label>
+
+    <label>
+      <input type="radio" name="identity-choice" value="Transgender">
+      Transgender
+    </label>
+  </fieldset>
+
+  <!-- First Name appears LAST, with changed attributes -->
+  <section>
+    <label for="given-name-field">First Name</label>
+    <div class="extra-wrapper">
+      <div class="another-wrapper">
+        <input
+          id="given-name-field"
+          name="personal-given-name"
+          type="text">
+      </div>
+    </div>
+  </section>
+</body>
+</html>

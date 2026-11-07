@@ -1,0 +1,389 @@
+
+using OpenQA.Selenium;
+using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Support.UI;
+
+var url = GetArg("--url")
+    ?? Environment.GetEnvironmentVariable("TARGET_URL")
+    ?? "https://app.cloudqa.io/home/AutomationPracticeForm";
+
+var firstName = GetArg("--first-name") ?? "AutomationTest";
+var gender = GetArg("--gender") ?? "Female";
+var state = GetArg("--state") ?? "India";
+
+var options = new ChromeOptions();
+options.AddArgument("--window-size=1365,900");
+
+if (args.Contains("--headless"))
+    options.AddArgument("--headless=new");
+
+using var driver = new ChromeDriver(options);
+
+try
+{
+    Console.WriteLine("Starting CloudQA automation...");
+    Console.WriteLine($"Target URL: {url}");
+
+    driver.Navigate().GoToUrl(url);
+
+    var wait = new WebDriverWait(
+        driver,
+        TimeSpan.FromSeconds(15)
+    );
+
+    var resolver = new SemanticResolver(driver);
+
+    IWebElement Find(string label, string kind, string choice = "")
+    {
+        return wait.Until(_ =>
+            resolver.Resolve(label, kind, choice)
+        ) ?? throw new NoSuchElementException(
+            $"Could not identify {label}"
+        );
+    }
+
+    // TEST 1: FIRST NAME
+    var first = Find("first name", "text");
+
+    first.Clear();
+    first.SendKeys(firstName);
+
+    Assert(
+        first.GetDomProperty("value") == firstName,
+        "First Name"
+    );
+
+    Console.WriteLine("PASS: First Name");
+
+    // TEST 2: GENDER
+    var radio = Find("gender", "radio", gender);
+
+    if (!radio.Selected)
+        radio.Click();
+
+    Assert(radio.Selected, "Gender");
+
+    Console.WriteLine("PASS: Gender");
+
+    // TEST 3: STATE
+    var dropdown = Find("state", "select");
+
+    var select = new SelectElement(dropdown);
+
+    var match = select.Options.FirstOrDefault(option =>
+        option.Text.Trim().Equals(
+            state,
+            StringComparison.OrdinalIgnoreCase
+        )
+    );
+
+    if (match == null)
+    {
+        throw new Exception(
+            $"Requested State option '{state}' is unavailable. " +
+            "Check the dropdown and test data."
+        );
+    }
+
+    select.SelectByText(match.Text);
+
+    Assert(
+        select.SelectedOption.Text.Trim().Equals(
+            state,
+            StringComparison.OrdinalIgnoreCase
+        ),
+        "State"
+    );
+
+    Console.WriteLine("PASS: State");
+    Console.WriteLine("RESULT: ALL TESTS PASSED");
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine(
+        "RESULT: FAILED - " + ex.Message
+    );
+
+    try
+    {
+        var screenshotPath = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "failure.png"
+        );
+
+        driver.GetScreenshot().SaveAsFile(screenshotPath);
+
+        Console.WriteLine(
+            "Failure screenshot: " + screenshotPath
+        );
+    }
+    catch
+    {
+        Console.Error.WriteLine(
+            "Could not capture failure screenshot."
+        );
+    }
+
+    Environment.ExitCode = 1;
+}
+
+// COMMAND-LINE ARGUMENTS
+string? GetArg(string key)
+{
+    var index = Array.IndexOf(args, key);
+
+    return index >= 0 && index + 1 < args.Length
+        ? args[index + 1]
+        : null;
+}
+
+// ASSERTION HELPER
+void Assert(bool condition, string field)
+{
+    if (!condition)
+    {
+        throw new Exception(
+            $"{field} verification failed"
+        );
+    }
+}
+
+// SEMANTIC ELEMENT RESOLVER
+public class SemanticResolver
+{
+    private readonly IWebDriver driver;
+
+    public SemanticResolver(IWebDriver driver)
+    {
+        this.driver = driver;
+    }
+
+    public IWebElement? Resolve(
+        string label,
+        string kind,
+        string choice = ""
+    )
+    {
+                const string script = """
+        const [target, kind, choice] = arguments;
+        
+        const norm = value =>
+        String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+        
+        const score = (text, query) => {
+        text = norm(text);
+        query = norm(query);
+        
+        if (!text || !query) return 0;
+        if (text === query) return 100;
+        
+        const words = text.split(' ');
+        if (words.includes(query)) return 75;
+        
+        if (text.includes(query)) return 45;
+        
+        return 0;
+        };
+        
+        const visible = element => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        
+        return rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        !element.disabled;
+        };
+        
+        const accessibleName = element => {
+        const labels = element.labels
+        ? [...element.labels]
+        .map(x => x.innerText)
+        .join(' ')
+        : '';
+        
+        const ids = (
+        element.getAttribute('aria-labelledby') || ''
+        ).split(/\s+/).filter(Boolean);
+        
+        const referenced = ids.map(id =>
+        document.getElementById(id)?.innerText || ''
+        ).join(' ');
+        
+        return norm([
+        labels,
+        referenced,
+        element.closest('label')?.innerText,
+        element.getAttribute('aria-label')
+        ].join(' '));
+        };
+        
+        const groupName = element => {
+        const parent = element.closest(
+        'fieldset,[role="radiogroup"],[role="group"]'
+        );
+        
+        if (parent) {
+        return norm(
+        parent.querySelector('legend')?.innerText ||
+        parent.getAttribute('aria-label')
+        );
+        }
+        
+        return norm(
+        element.parentElement?.parentElement
+        ?.querySelector('label,legend')?.innerText
+        );
+        };
+        
+        const elements = [
+        ...document.querySelectorAll(
+        'input,textarea,select,[role="radio"]'
+        )
+        ].filter(visible);
+        
+        const candidates = [];
+        
+        for (const element of elements) {
+        const tag = element.tagName.toLowerCase();
+        const type = norm(
+        element.getAttribute('type')
+        );
+        
+        if (kind === 'text') {
+        const isText =
+        tag === 'textarea' ||
+        (
+        tag === 'input' &&
+        ['', 'text', 'search'].includes(type)
+        );
+        
+        if (!isText) continue;
+        }
+        
+        if (kind === 'radio') {
+        const isRadio =
+        type === 'radio' ||
+        element.getAttribute('role') === 'radio';
+        
+        if (!isRadio) continue;
+        }
+        
+        if (kind === 'select' && tag !== 'select')
+        continue;
+        
+        const accessible = accessibleName(element);
+        
+        let points = 0;
+        
+        if (kind === 'radio') {
+        const optionScore = Math.max(
+        score(element.value, choice),
+        score(accessible, choice)
+        );
+        
+        const group = groupName(element);
+        const name = norm(
+        element.getAttribute('name')
+        );
+        
+        const groupScore = Math.max(
+        score(group, target),
+        score(name, target)
+        );
+        
+        if (optionScore === 0 || groupScore === 0)
+        continue;
+        
+        points = optionScore + groupScore;
+        }
+        else {
+        const semanticScore = Math.max(
+        score(accessible, target),
+        score(
+        element.getAttribute('placeholder'),
+        target
+        ) * 0.85,
+        score(groupName(element), target) * 0.7
+        );
+        
+        const attributeScore = Math.max(
+        score(
+        element.getAttribute('name'),
+        target
+        ) * 0.3,
+        score(element.id, target) * 0.25
+        );
+        
+        points = Math.max(
+        semanticScore,
+        attributeScore
+        );
+        }
+        
+        if (points > 0) {
+        candidates.push({
+        element,
+        points
+        });
+        }
+        }
+        
+        candidates.sort(
+        (a, b) => b.points - a.points
+        );
+        
+        if (!candidates.length)
+        return null;
+        
+        const best = candidates[0];
+        
+        const minimumScore =
+        kind === 'radio' ? 120 : 20;
+        
+        if (best.points < minimumScore)
+        return null;
+        
+        if (candidates.length > 1) {
+        const second = candidates[1];
+        
+        if (best.points - second.points < 12) {
+        const bestGroup = best.element.closest(
+        'fieldset,[role="radiogroup"],[role="group"]'
+        );
+        
+        const secondGroup = second.element.closest(
+        'fieldset,[role="radiogroup"],[role="group"]'
+        );
+        
+        if (
+        kind !== 'radio' ||
+        !bestGroup ||
+        !secondGroup ||
+        bestGroup !== secondGroup
+        ) {
+        throw new Error(
+        'Ambiguous field: ' + target +
+        '. Multiple matching elements found.'
+        );
+        }
+        }
+        }
+        
+        return best.element;
+        """;
+
+        return ((IJavaScriptExecutor)driver)
+            .ExecuteScript(
+                script,
+                label,
+                kind,
+                choice
+            ) as IWebElement;
+    }
+}
+

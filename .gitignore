@@ -1,0 +1,8 @@
+﻿**/bin/
+**/obj/
+.vs/
+.vscode/
+failure.png
+gender-debug.txt
+*.user
+*.suo

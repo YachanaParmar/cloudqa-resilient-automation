@@ -1,0 +1,364 @@
+
+using OpenQA.Selenium;
+using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Support.UI;
+
+var url = GetArg("--url") ??
+    Environment.GetEnvironmentVariable("TARGET_URL") ??
+    "https://app.cloudqa.io/home/AutomationPracticeForm";
+
+var firstName = GetArg("--first-name") ?? "AutomationTest";
+var gender = GetArg("--gender") ?? "Female";
+var state = GetArg("--state") ?? "India";
+
+var options = new ChromeOptions();
+options.AddArgument("--window-size=1365,900");
+
+if (args.Contains("--headless"))
+    options.AddArgument("--headless=new");
+
+using var driver = new ChromeDriver(options);
+
+try
+{
+    Console.WriteLine("Starting CloudQA automation...");
+    Console.WriteLine("Target URL: " + url);
+
+    driver.Navigate().GoToUrl(url);
+
+    var wait = new WebDriverWait(
+        driver, TimeSpan.FromSeconds(15));
+
+    var resolver = new SemanticResolver(driver);
+
+    IWebElement Find(string label, string kind, string choice = "")
+    {
+        return wait.Until(_ =>
+            resolver.Resolve(label, kind, choice)
+        ) ?? throw new NoSuchElementException(
+            "Field not found: " + label);
+    }
+
+    // TEST 1: FIRST NAME
+    var first = Find("first name", "text");
+
+    first.Clear();
+    first.SendKeys(firstName);
+
+    Assert(
+        first.GetDomProperty("value") == firstName,
+        "First Name"
+    );
+
+    Console.WriteLine("PASS: First Name");
+
+    // TEST 2: GENDER
+    var radio = Find("gender", "radio", gender);
+
+    if (!radio.Selected)
+    {
+        try
+        {
+            radio.Click();
+        }
+        catch (ElementClickInterceptedException)
+        {
+            throw new Exception(
+                "Gender radio button is obstructed.");
+        }
+    }
+
+    Assert(radio.Selected, "Gender");
+
+    Console.WriteLine("PASS: Gender");
+
+    // TEST 3: STATE
+    var dropdown = Find("state", "select");
+
+    var select = new SelectElement(dropdown);
+
+    var match = select.Options.FirstOrDefault(x =>
+        x.Text.Trim().Equals(
+            state,
+            StringComparison.OrdinalIgnoreCase));
+
+    if (match == null)
+        throw new Exception(
+            "State option unavailable: " + state);
+
+    select.SelectByText(match.Text);
+
+    Assert(
+        select.SelectedOption.Text.Trim().Equals(
+            state,
+            StringComparison.OrdinalIgnoreCase),
+        "State"
+    );
+
+    Console.WriteLine("PASS: State");
+    Console.WriteLine("RESULT: ALL TESTS PASSED");
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine(
+        "RESULT: FAILED - " + ex.Message);
+
+    try
+    {
+        var path = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "failure.png");
+
+        driver.GetScreenshot().SaveAsFile(path);
+        Console.WriteLine("Screenshot: " + path);
+    }
+    catch
+    {
+        Console.Error.WriteLine(
+            "Screenshot unavailable.");
+    }
+
+    Environment.ExitCode = 1;
+}
+
+string? GetArg(string key)
+{
+    var index = Array.IndexOf(args, key);
+
+    return index >= 0 && index + 1 < args.Length
+        ? args[index + 1]
+        : null;
+}
+
+void Assert(bool condition, string field)
+{
+    if (!condition)
+        throw new Exception(
+            field + " verification failed");
+}
+
+public class SemanticResolver
+{
+    private readonly IWebDriver driver;
+
+    public SemanticResolver(IWebDriver driver)
+    {
+        this.driver = driver;
+    }
+
+    public IWebElement? Resolve(
+        string target,
+        string kind,
+        string choice = "")
+    {
+        const string script = """
+        const [target, kind, choice] = arguments;
+
+        const norm = x => String(x || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+
+        const similarity = (a, b) => {
+            a = norm(a);
+            b = norm(b);
+
+            if (!a || !b) return 0;
+            if (a === b) return 100;
+            if (a.split(' ').includes(b)) return 70;
+            if (a.includes(b)) return 45;
+            return 0;
+        };
+
+        const visible = el => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+
+            return r.width > 0 &&
+                r.height > 0 &&
+                s.display !== 'none' &&
+                s.visibility !== 'hidden' &&
+                !el.disabled;
+        };
+
+        const accessible = el => {
+            const labels = el.labels
+                ? [...el.labels].map(x =>
+                    x.textContent).join(' ')
+                : '';
+
+            const ids = (
+                el.getAttribute('aria-labelledby') || ''
+            ).split(/\s+/).filter(Boolean);
+
+            const references = ids.map(id =>
+                document.getElementById(id)
+                    ?.textContent || ''
+            ).join(' ');
+
+            return [
+                labels,
+                references,
+                el.getAttribute('aria-label'),
+                el.closest('label')?.textContent
+            ].filter(Boolean).join(' ');
+        };
+
+        const contextScore = (el, query) => {
+            let score = 0;
+
+            const group = el.closest(
+                'fieldset,[role="radiogroup"],[role="group"]'
+            );
+
+            if (group) {
+                const legend = group.querySelector('legend');
+                score = Math.max(
+                    score,
+                    similarity(legend?.textContent, query),
+                    similarity(
+                        group.getAttribute('aria-label'),
+                        query
+                    )
+                );
+            }
+
+            // Search nearby semantic labels.
+            // Do not use unrelated distant page text.
+            let parent = el.parentElement;
+
+            for (let depth = 0;
+                 parent && depth < 4;
+                 depth++, parent = parent.parentElement) {
+
+                const labels = [
+                    ...parent.querySelectorAll(
+                        'label,legend,[role="heading"]'
+                    )
+                ];
+
+                for (const label of labels) {
+                    const text = norm(label.textContent);
+
+                    if (text === norm(query)) {
+                        score = Math.max(
+                            score, 95 - depth * 8);
+                    }
+                }
+            }
+
+            return score;
+        };
+
+        const nodes = [
+            ...document.querySelectorAll(
+                'input,textarea,select,[role="radio"]'
+            )
+        ].filter(visible);
+
+        const candidates = [];
+
+        for (const el of nodes) {
+            const tag = el.tagName.toLowerCase();
+            const type = norm(el.getAttribute('type'));
+
+            if (kind === 'text') {
+                if (!(tag === 'textarea' ||
+                    (tag === 'input' &&
+                    ['', 'text', 'search'].includes(type))))
+                    continue;
+            }
+
+            if (kind === 'radio') {
+                if (!(type === 'radio' ||
+                    el.getAttribute('role') === 'radio'))
+                    continue;
+            }
+
+            if (kind === 'select' && tag !== 'select')
+                continue;
+
+            const labelScore = similarity(
+                accessible(el), target);
+
+            const context = contextScore(el, target);
+
+            const attributeScore = Math.max(
+                similarity(el.getAttribute('name'), target),
+                similarity(el.id, target)
+            );
+
+            let points = 0;
+
+            if (kind === 'radio') {
+                const optionScore = Math.max(
+                    similarity(el.value, choice),
+                    similarity(accessible(el), choice)
+                );
+
+                if (optionScore < 70) continue;
+
+                const groupScore = Math.max(
+                    context,
+                    attributeScore * 0.35
+                );
+
+                if (groupScore < 20) continue;
+
+                points = optionScore + groupScore;
+            }
+            else {
+                const placeholderScore = similarity(
+                    el.getAttribute('placeholder'),
+                    target
+                );
+
+                points = Math.max(
+                    labelScore,
+                    context * 0.9,
+                    placeholderScore * 0.8,
+                    attributeScore * 0.25
+                );
+            }
+
+            if (points >= 20) {
+                candidates.push({el, points});
+            }
+        }
+
+        candidates.sort((a, b) =>
+            b.points - a.points);
+
+        if (!candidates.length)
+            return null;
+
+        const best = candidates[0];
+
+        const minimum =
+            kind === 'radio' ? 120 : 20;
+
+        if (best.points < minimum)
+            return null;
+
+        if (candidates.length > 1) {
+            const second = candidates[1];
+
+            if (best.points - second.points < 10) {
+                throw new Error(
+                    'Ambiguous field: ' + target +
+                    '. Top scores: ' +
+                    best.points.toFixed(1) + ', ' +
+                    second.points.toFixed(1)
+                );
+            }
+        }
+
+        return best.el;
+        """;
+
+        return ((IJavaScriptExecutor)driver)
+            .ExecuteScript(
+                script, target, kind, choice
+            ) as IWebElement;
+    }
+}
